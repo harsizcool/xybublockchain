@@ -55,12 +55,12 @@ class Blockchain:
     def get_difficulty(self):
         """Calculate current difficulty based on recent block times to maintain ~5 min block time"""
         if len(self.chain) < 2:
-            return 3  # Start with 3 leading zeros
+            return 5  # Start with 5 leading zeros
         
         # Look at last 10 blocks (or fewer if chain is shorter) to calculate average time
         lookback = min(10, len(self.chain) - 1)
         if lookback < 2:
-            return 3
+            return 5
         
         recent_blocks = self.chain[-lookback:]
         
@@ -71,7 +71,7 @@ class Blockchain:
             time_differences.append(time_diff)
         
         if not time_differences:
-            return 3
+            return 5
         
         avg_time = sum(time_differences) / len(time_differences)
         target_time = 300  # 5 minutes in seconds
@@ -80,7 +80,7 @@ class Blockchain:
         # Use minimum leading zeros as baseline (all blocks met at least this requirement)
         recent_difficulties = [self.count_leading_zeros(b["hash"]) for b in recent_blocks[-5:]]
         if not recent_difficulties:
-            current_difficulty = 3
+            current_difficulty = 5
         else:
             # Use minimum as baseline (conservative, but accurate)
             # All blocks had at least this many leading zeros
@@ -92,14 +92,15 @@ class Blockchain:
         # Adjust difficulty based on average block time
         # If blocks are too fast, increase difficulty
         # If blocks are too slow, decrease difficulty
+        # Difficulty range: 5-9 leading zeros
         if avg_time < target_time * 0.7:  # Much faster than target
-            new_difficulty = min(current_difficulty + 2, 6)
+            new_difficulty = min(current_difficulty + 2, 9)
         elif avg_time < target_time * 0.85:  # Faster than target
-            new_difficulty = min(current_difficulty + 1, 6)
+            new_difficulty = min(current_difficulty + 1, 9)
         elif avg_time > target_time * 1.5:  # Much slower than target
-            new_difficulty = max(current_difficulty - 2, 3)
+            new_difficulty = max(current_difficulty - 2, 5)
         elif avg_time > target_time * 1.15:  # Slower than target
-            new_difficulty = max(current_difficulty - 1, 3)
+            new_difficulty = max(current_difficulty - 1, 5)
         else:
             new_difficulty = current_difficulty  # Keep current difficulty
         
