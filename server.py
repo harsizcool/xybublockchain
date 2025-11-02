@@ -17,7 +17,7 @@ CORS(app)
 
 BLOCKCHAIN_FILE = "solopowharzblockchain.json"
 USERS_FILE = "miners_accounts.json"
-GENESIS_REWARD = 1000
+GENESIS_REWARD = 3000
 HALVING_INTERVAL = 50
 
 
