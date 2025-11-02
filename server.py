@@ -16,6 +16,7 @@ app = Flask(__name__)
 CORS(app)
 
 BLOCKCHAIN_FILE = "solopowharzblockchain.json"
+USERS_FILE = "miners_accounts.json"
 GENESIS_REWARD = 1000
 HALVING_INTERVAL = 50
 
@@ -212,18 +213,93 @@ class Blockchain:
 # Initialize blockchain
 blockchain = Blockchain()
 
+
+class UserManager:
+    """Manages miner accounts - username only, miner_id derived from username"""
+    
+    def __init__(self):
+        self.users = {}
+        self.load_users()
+    
+    def load_users(self):
+        """Load users from JSON file"""
+        if os.path.exists(USERS_FILE):
+            try:
+                with open(USERS_FILE, 'r') as f:
+                    self.users = json.load(f)
+                print(f"Loaded {len(self.users)} user accounts")
+            except Exception as e:
+                print(f"Error loading users: {e}")
+                self.users = {}
+        else:
+            self.users = {}
+    
+    def save_users(self):
+        """Save users to JSON file"""
+        try:
+            with open(USERS_FILE, 'w') as f:
+                json.dump(self.users, f, indent=2)
+        except Exception as e:
+            print(f"Error saving users: {e}")
+    
+    def get_miner_id_from_username(self, username):
+        """Generate deterministic miner_id from username using SHA256"""
+        # Hash username to get consistent miner_id (64 char hex string)
+        return hashlib.sha256(username.encode()).hexdigest()
+    
+    def register_or_login_user(self, username):
+        """Register or login user - miner_id is derived from username"""
+        username = username.strip()
+        
+        if not username:
+            return False, "Username cannot be empty"
+        
+        if len(username) < 3:
+            return False, "Username must be at least 3 characters"
+        
+        # Generate miner_id from username (deterministic)
+        miner_id = self.get_miner_id_from_username(username)
+        
+        # Register user if not exists
+        if username not in self.users:
+            self.users[username] = {
+                "miner_id": miner_id,
+                "created_at": int(time.time())
+            }
+            self.save_users()
+            return True, miner_id
+        
+        # User exists, return their miner_id
+        return True, self.users[username]["miner_id"]
+    
+    def get_miner_id(self, username):
+        """Get miner_id for a user"""
+        if username in self.users:
+            return self.users[username]["miner_id"]
+        # Generate on-the-fly if not registered yet
+        return self.get_miner_id_from_username(username)
+
+
+# Initialize user manager
+user_manager = UserManager()
+
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1434624818044473430/Qb6kRS1QmR-KajodHDcKKQJCOX-TKXuIBwsOKIY1o4OXTVkiLYjdbyDD-oqN87dGvUpW"
 
 def send_discord_notification(block, nickname):
     """Send Discord webhook notification when block is mined"""
+    # Calculate difficulty that was required for this block
+    difficulty = blockchain.count_leading_zeros(block["hash"])
+    
     embed = {
         "title": f"BLOCK {block['index']} MINED!",
         "color": 15105570,  # Orange color
         "fields": [
             {"name": "Hash", "value": block["hash"], "inline": False},
             {"name": "Previous Hash", "value": block["previous_hash"], "inline": False},
+            {"name": "Difficulty", "value": f"{difficulty} leading zeros", "inline": True},
+            {"name": "Reward", "value": f"{block['reward']} GCoins", "inline": True},
             {"name": "Mined by", "value": nickname, "inline": True},
-            {"name": "Miner ID", "value": block["miner_id"], "inline": True}
+            {"name": "Miner ID", "value": block["miner_id"][:16] + "...", "inline": True}
         ],
         "timestamp": datetime.utcnow().isoformat()
     }
@@ -292,18 +368,102 @@ def get_chain():
 
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
-    """Get blockchain statistics"""
+    """Get comprehensive blockchain statistics"""
     latest = blockchain.get_latest_block()
     if not latest:
         return jsonify({"error": "No blocks found"}), 404
     
+    # Calculate total GCoins mined
+    total_gcoins = 0
+    for block in blockchain.chain:
+        total_gcoins += block.get("reward", 0)
+    
+    # Calculate difficulty stats
+    difficulties = []
+    for block in blockchain.chain[1:]:  # Skip genesis
+        difficulties.append(blockchain.count_leading_zeros(block["hash"]))
+    
+    avg_difficulty = sum(difficulties) / len(difficulties) if difficulties else 0
+    min_difficulty = min(difficulties) if difficulties else 0
+    max_difficulty = max(difficulties) if difficulties else 0
+    
+    # Calculate block times
+    block_times = []
+    for i in range(1, len(blockchain.chain)):
+        time_diff = blockchain.chain[i]["timestamp"] - blockchain.chain[i-1]["timestamp"]
+        block_times.append(time_diff)
+    
+    avg_block_time = sum(block_times) / len(block_times) if block_times else 0
+    
+    # Count blocks per miner
+    miner_stats = {}
+    for block in blockchain.chain[1:]:  # Skip genesis
+        miner_id = block.get("miner_id", "unknown")
+        if miner_id not in miner_stats:
+            miner_stats[miner_id] = {"blocks": 0, "rewards": 0}
+        miner_stats[miner_id]["blocks"] += 1
+        miner_stats[miner_id]["rewards"] += block.get("reward", 0)
+    
+    current_difficulty = blockchain.get_difficulty()
+    current_reward = blockchain.calculate_reward(latest["index"])
+    next_reward = blockchain.calculate_reward(latest["index"] + 1)
+    
     return jsonify({
         "total_blocks": len(blockchain.chain),
         "latest_index": latest["index"],
-        "current_difficulty": blockchain.get_difficulty(),
-        "current_reward": blockchain.calculate_reward(latest["index"]),
-        "next_reward": blockchain.calculate_reward(latest["index"] + 1)
+        "current_difficulty": current_difficulty,
+        "difficulty_stats": {
+            "current": current_difficulty,
+            "average": round(avg_difficulty, 2),
+            "min": min_difficulty,
+            "max": max_difficulty
+        },
+        "rewards": {
+            "current": current_reward,
+            "next": next_reward,
+            "total_gcoins_mined": total_gcoins,
+            "halving_count": latest["index"] // 50
+        },
+        "block_times": {
+            "average_seconds": round(avg_block_time, 2),
+            "average_minutes": round(avg_block_time / 60, 2)
+        },
+        "top_miners": dict(sorted(
+            miner_stats.items(),
+            key=lambda x: x[1]["blocks"],
+            reverse=True
+        )[:10]),  # Top 10 miners
+        "total_unique_miners": len(miner_stats)
     })
+
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    """Login/Register miner - username only, miner_id derived from username"""
+    try:
+        data = request.json
+        username = data.get("username", "").strip()
+        
+        if not username:
+            return jsonify({"success": False, "error": "Username is required"}), 400
+        
+        if len(username) < 3:
+            return jsonify({"success": False, "error": "Username must be at least 3 characters"}), 400
+        
+        success, miner_id = user_manager.register_or_login_user(username)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Login successful",
+                "miner_id": miner_id,
+                "username": username
+            })
+        else:
+            return jsonify({"success": False, "error": miner_id}), 400
+    
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 if __name__ == '__main__':
@@ -314,5 +474,6 @@ if __name__ == '__main__':
     print("  POST /api/submit  - Submit a new block")
     print("  GET  /api/chain   - Get full blockchain")
     print("  GET  /api/stats   - Get blockchain stats")
+    print("  POST /api/login   - Login/Register miner (username only)")
     app.run(host='0.0.0.0', port=5000, debug=True)
 
